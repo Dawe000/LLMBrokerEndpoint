@@ -17,7 +17,7 @@ class ContractInteract {
     constructor(privateKey) {
         this.wallet = new ethers.Wallet(privateKey, new ethers.providers.JsonRpcProvider(RPC_URL));
         this.BrokerContract = new ethers.Contract(BROKER_CONTRACT_ADDRESS, BrokerABI, this.wallet);
-        this.ServerContract = new ethers.Contract(SERVER_ADDRESS, SERVER_CONTRACT_ADDRESS, this.wallet);
+        this.ServerContract = new ethers.Contract(SERVER_CONTRACT_ADDRESS, ServerABI, this.wallet);
     }
 
     async readTokenBalance(publicKey) {
@@ -31,3 +31,5 @@ class ContractInteract {
 
 
 }
+
+export default ContractInteract;
