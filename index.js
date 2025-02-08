@@ -12,6 +12,8 @@ const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
   });
 
+  
+
 // Root route
 app.get('/', (req, res) => {
     res.send('Hello World');
