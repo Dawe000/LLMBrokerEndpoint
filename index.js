@@ -15,6 +15,8 @@ const account = await privateKeyToAccount({
     privateKey: process.env.PRIVATE_KEY
 });
 
+const address = process.env.SERVER_CONTRACT_ADDRESS;
+
 let api = new UserApi(client,account,process.env.BROKER_CONTRACT_ADDRESS);
 
 // Middleware to parse JSON request bodies
@@ -24,8 +26,6 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-
-
 // Root route
 app.get('/', (req, res) => {
   res.send('Hello World');
@@ -33,38 +33,60 @@ app.get('/', (req, res) => {
 
 // POST /deepseek route
 app.post('/deepseek', async (req, res) => {
-  if (process.env.LOCALMODE === 'Hugging Face') {
-    const { context, num } = req.body;
-    if (typeof num === 'number' && isValidContext(context)) {
-      // Send request to the running Python process
+  let usertokensremaining = 1000;
+  const { context, num, publicAddress, signature} = req.body;
+  if (deepseektokens(context)+num >  usertokensremaining){
+    res.status(400).send('Bad Request: Not enough tokens');
+    return;
+  }
+  if (!api.verify(publicAddress, signature, context)){
+    res.status(400).send('Bad Request: Invalid Signature');
+    return;
+  }
+  if (api.GetClientAgreement(publicAddress) === false){ //wont work, the contract needs to be the other way round, we need to be able to somehow get the agreement contract from the public key not the address
+    res.status(400).send('Bad Request: No agreement');
+    return;
+  }
+  
+  if (typeof num === 'number' && isValidContext(context)) {
+    if (process.env.LOCALMODE === 'Hugging Face') {
       runPython(JSON.stringify(context, null), num, (out) => {
         // Parse the fixed string into a JavaScript object
         const data = JSON.parse(out);
+        api.GetClientAgreement
         res.send(data[0]);
-      });
-    } else {
-      res.status(400).send('Bad Request: Expected a context object and a number');
-    }
-  } else if (process.env.LOCALMODE === 'Ollama') {
-    const { context, num } = req.body;
-    if (typeof num === 'number' && isValidContext(context)) {
+      });}
+    else if (process.env.LOCALMODE === 'Ollama') {
       const response = await ollama.chat({
         model: 'deepseek-r1:14b',
         messages: context,
         keep_alive: '10m',
         num_predict: num
       })
+
       res.send(response)
-    } else {
-      res.status(400).send('Bad Request: Expected a context object and a number');
-    }
   }
-});
+  else{
+    res.status(400).send('Bad Request: Expected a context object and a number');
+  }
+}});
 
 // POST /deepseek/tokens route
 app.post('/deepseek/tokens', (req, res) => {
   const { context } = req.body;
   if (isValidContext(context)) {
+    return deepseektokens(context);
+  } else {
+    res.status(400).send('Bad Request: Expected a context object');
+  }
+});
+
+function deepseektokens(context){
+  const pythonProcess = spawn("python3", ["deepseektokens.py"]);
+  pythonProcess.stdin.write(JSON.stringify(context) + "\n");
+  pythonProcess.stdin.end();                // End input stream
+
+  pythonProcess.stdout.on("data", (output) => {
     try {
       const pythonProcess = spawn("python3", ["deepseektokens.py"]);
       pythonProcess.stdin.write(JSON.stringify(context) + "\n");
@@ -77,11 +99,8 @@ app.post('/deepseek/tokens', (req, res) => {
     } catch (error) {
       console.error(`Error: ${error.message}`);
     }
-
-  } else {
-    res.status(400).send('Bad Request: Expected a context object');
-  }
-});
+  });
+}
 
 // POST /chatgpt/tokens route
 app.post('/chatgpt/tokens', (req, res) => {
