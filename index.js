@@ -19,6 +19,9 @@ const address = process.env.SERVER_CONTRACT_ADDRESS;
 
 let api = new UserApi(client,account,process.env.BROKER_CONTRACT_ADDRESS);
 
+// Add this near the top of your file, after the imports
+const activeRequests = new Map();
+
 // Middleware to parse JSON request bodies
 app.use(express.json());
 
@@ -34,42 +37,68 @@ app.get('/', (req, res) => {
 // POST /deepseek route
 app.post('/deepseek', async (req, res) => {
   let usertokensremaining = 1000;
-  const { context, num, publicAddress, signature} = req.body;
-  if (deepseektokens(context)+num >  usertokensremaining){
-    res.status(400).send('Bad Request: Not enough tokens');
-    return;
-  }
-  if (!api.verify(publicAddress, signature, context)){
-    res.status(400).send('Bad Request: Invalid Signature');
-    return;
-  }
-  if (api.GetClientAgreement(publicAddress) === false){ //wont work, the contract needs to be the other way round, we need to be able to somehow get the agreement contract from the public key not the address
-    res.status(400).send('Bad Request: No agreement');
-    return;
-  }
-  
-  if (typeof num === 'number' && isValidContext(context)) {
-    if (process.env.LOCALMODE === 'Hugging Face') {
-      runPython(JSON.stringify(context, null), num, (out) => {
-        // Parse the fixed string into a JavaScript object
-        const data = JSON.parse(out);
-        api.GetClientAgreement
-        res.send(data[0]);
-      });}
-    else if (process.env.LOCALMODE === 'Ollama') {
-      const response = await ollama.chat({
-        model: 'deepseek-r1:14b',
-        messages: context,
-        keep_alive: '10m',
-        num_predict: num
-      })
+  const { context, num, publicKey, signature, address} = req.body;
 
-      res.send(response)
+  // Check if this public key already has an active request
+  if (activeRequests.has(publicKey)) {
+    res.status(429).send('Too Many Requests: An inference is already in progress for this public key');
+    return;
   }
-  else{
-    res.status(400).send('Bad Request: Expected a context object and a number');
+
+  // Set lock for this public key
+  activeRequests.set(publicKey, true);
+
+  try {
+    // Your existing validation checks
+    if (deepseektokens(context)+num > usertokensremaining){
+      res.status(400).send('Bad Request: Not enough tokens');
+      return;
+    }
+    if (!api.verify(publicKey, signature, context)){
+      res.status(400).send('Bad Request: Invalid Signature');
+      return;
+    }
+    if (api.GetClientAgreement(address,publicKey) === null){
+      res.status(400).send('Bad Request: No agreement');
+      return;
+    }
+    
+    if (typeof num === 'number' && isValidContext(context)) {
+      if (process.env.LOCALMODE === 'Hugging Face') {
+        runPython(JSON.stringify(context, null), num, async (out) => {
+          try {
+            const data = JSON.parse(out);
+            let agreement = await api.GetClientAgreement(address,address);
+            await api.NotifyResponse(agreement, data[0].inputtokens,data[0].outputtokens);
+            res.send(data[0]);
+          } finally {
+            // Release the lock
+            activeRequests.delete(publicKey);
+          }
+        });
+      } else if (process.env.LOCALMODE === 'Ollama') {
+        try {
+          const response = await ollama.chat({
+            model: 'deepseek-r1:14b',
+            messages: context,
+            keep_alive: '10m',
+            num_predict: num
+          });
+          res.send(response);
+        } finally {
+          // Release the lock
+          activeRequests.delete(publicKey);
+        }
+      }
+    } else {
+      res.status(400).send('Bad Request: Expected a context object and a number');
+    }
+  } catch (error) {
+    // If any error occurs, make sure to release the lock
+    activeRequests.delete(publicKey);
+    res.status(500).send('Internal Server Error');
   }
-}});
+});
 
 // POST /deepseek/tokens route
 app.post('/deepseek/tokens', (req, res) => {
