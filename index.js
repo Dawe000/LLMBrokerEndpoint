@@ -52,14 +52,17 @@ app.post('/deepseek', async (req, res) => {
     // Your existing validation checks
     if (deepseektokens(context)+num > usertokensremaining){
       res.status(400).send('Bad Request: Not enough tokens');
+      activeRequests.delete(publicKey);
       return;
     }
     if (!api.verify(publicKey, signature, context)){
       res.status(400).send('Bad Request: Invalid Signature');
+      activeRequests.delete(publicKey);
       return;
     }
     if (api.GetClientAgreement(address,publicKey) === null){
       res.status(400).send('Bad Request: No agreement');
+      activeRequests.delete(publicKey);
       return;
     }
     
