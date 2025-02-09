@@ -15,7 +15,7 @@ const account = await privateKeyToAccount({
     privateKey: process.env.PRIVATE_KEY
 });
 
-const address = process.env.SERVER_CONTRACT_ADDRESS;
+const SERVERADDRESS = process.env.SERVER_CONTRACT_ADDRESS;
 
 let api = new UserApi(client,account,process.env.BROKER_CONTRACT_ADDRESS);
 
@@ -36,9 +36,10 @@ app.get('/', (req, res) => {
 
 // POST /deepseek route
 app.post('/deepseek', async (req, res) => {
-  let usertokensremaining = 1000;
+
   const { context, num, publicKey, signature, address} = req.body;
 
+  
   // Check if this public key already has an active request
   if (activeRequests.has(publicKey)) {
     res.status(429).send('Too Many Requests: An inference is already in progress for this public key');
@@ -49,9 +50,8 @@ app.post('/deepseek', async (req, res) => {
   activeRequests.set(publicKey, true);
 
   try {
-    // Your existing validation checks
-    if (deepseektokens(context)+num > usertokensremaining){
-      res.status(400).send('Bad Request: Not enough tokens');
+    if (api.GetClientAgreement(SERVERADDRESS,publicKey) === null){
+      res.status(400).send('Bad Request: No agreement');
       activeRequests.delete(publicKey);
       return;
     }
@@ -60,8 +60,10 @@ app.post('/deepseek', async (req, res) => {
       activeRequests.delete(publicKey);
       return;
     }
-    if (api.GetClientAgreement(address,publicKey) === null){
-      res.status(400).send('Bad Request: No agreement');
+    let agreementAddress = api.GetClientAgreement(SERVERADDRESS,address);
+    let usertokensremaining = api.GetRemainingTokens(agreementAddress);
+    if (deepseektokens(context)+num > usertokensremaining){
+      res.status(400).send('Bad Request: Not enough tokens');
       activeRequests.delete(publicKey);
       return;
     }
