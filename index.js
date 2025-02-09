@@ -26,6 +26,21 @@ const activeRequests = new Map();
 // Middleware to parse JSON request bodies
 app.use(express.json());
 
+app.use((req, res, next) => {
+  // Allow any origin (or specify a particular origin)
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  // Explicitly allow the Content-Type header (and others as needed)
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  // Allow specific HTTP methods
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  
+  // If this is a preflight request, send a 200 response immediately.
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
@@ -103,8 +118,21 @@ app.post('/deepseek', async (req, res) => {
 
         let agreement = await api.GetClientAgreement(SERVERADDRESS, address);
         await api.NotifyResponse(agreement, inputTokens, ollamatokens(response.message.content));
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.header('Access-Control-Allow-Origin', '*');
+        res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
 
-        res.send(response);
+        const data = {
+          "generated_text": [ { 
+          "role" : "bot",
+          "content" : response.message.content,}
+        ],
+          "inputtokens": inputTokens,
+          "outputtokens" : ollamatokens(response.message.content)
+        }
+
+        res.send(data);
       } finally {
         // Release the lock
         activeRequests.delete(publicKey);
