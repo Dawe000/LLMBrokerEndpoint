@@ -1,13 +1,21 @@
-const express = require('express');
-const { spawn, execSync } = require("child_process");  // Use spawn to manage a persistent Python process and execSync to run a Python script once
-const app = express();  // Create an instance of express
-const port = 8080;
-const { OpenAI } = require('openai/index.mjs');
+import express from 'express';
+import { spawn, execSync } from 'child_process';
+import { OpenAI } from 'openai';
 import { UserApi } from 'llmbrokerapilib';
-require('dotenv').config();
-const {client} = require('./client.js');
+import dotenv from 'dotenv';
+import { client } from './client.js';
+import { createWallet, privateKeyToAccount } from "thirdweb/wallets";
+const port = 8080;
 
-api = new UserApi();
+dotenv.config();
+const app = express();
+const wallet = createWallet("local");
+const account = await privateKeyToAccount({
+    client,
+    privateKey: process.env.PRIVATE_KEY
+});
+
+let api = new UserApi(client,account,process.env.BROKER_CONTRACT_ADDRESS);
 
 // Middleware to parse JSON request bodies
 app.use(express.json());
