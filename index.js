@@ -3,7 +3,11 @@ const { spawn , execSync} = require("child_process");  // Use spawn to manage a 
 const app = express();  // Create an instance of express
 const port = 8080;
 const { OpenAI } = require('openai/index.mjs');
+import { UserApi } from 'llmbrokerapilib';
 require('dotenv').config();
+const {client} = require('./client.js');
+
+api = new UserApi();
 
 // Middleware to parse JSON request bodies
 app.use(express.json());
@@ -11,8 +15,6 @@ app.use(express.json());
 const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
   });
-
-  
 
 // Root route
 app.get('/', (req, res) => {
