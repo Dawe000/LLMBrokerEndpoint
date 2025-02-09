@@ -1,7 +1,8 @@
 import express from 'express';
 import { spawn, execSync } from 'child_process';
 import { OpenAI } from 'openai';
-import { UserApi } from 'llmbrokerapilib';
+import ollama from 'ollama';
+import UserApi from 'llmbrokerapilib';
 import dotenv from 'dotenv';
 import { client } from './client.js';
 import { createWallet, privateKeyToAccount } from "thirdweb/wallets";
@@ -11,13 +12,13 @@ dotenv.config();
 const app = express();
 const wallet = createWallet("local");
 const account = await privateKeyToAccount({
-    client,
-    privateKey: process.env.PRIVATE_KEY
+  client,
+  privateKey: process.env.PRIVATE_KEY
 });
 
 const SERVERADDRESS = process.env.SERVER_CONTRACT_ADDRESS;
 
-let api = new UserApi(client,account,process.env.BROKER_CONTRACT_ADDRESS);
+let api = new UserApi(client, account, process.env.BROKER_CONTRACT_ADDRESS);
 
 // Add this near the top of your file, after the imports
 const activeRequests = new Map();
@@ -37,9 +38,10 @@ app.get('/', (req, res) => {
 // POST /deepseek route
 app.post('/deepseek', async (req, res) => {
 
-  const { context, num, publicKey, signature, address} = req.body;
+  const { context, num, publicKey, signature, address } = req.body;
 
-  
+  console.log(address);
+
   // Check if this public key already has an active request
   if (activeRequests.has(publicKey)) {
     res.status(429).send('Too Many Requests: An inference is already in progress for this public key');
@@ -49,60 +51,73 @@ app.post('/deepseek', async (req, res) => {
   // Set lock for this public key
   activeRequests.set(publicKey, true);
 
-  try {
-    if (api.GetClientAgreement(SERVERADDRESS,publicKey) === null){
-      res.status(400).send('Bad Request: No agreement');
-      activeRequests.delete(publicKey);
-      return;
-    }
-    if (!api.verify(publicKey, signature, context)){
-      res.status(400).send('Bad Request: Invalid Signature');
-      activeRequests.delete(publicKey);
-      return;
-    }
-    let agreementAddress = api.GetClientAgreement(SERVERADDRESS,address);
-    let usertokensremaining = api.GetRemainingTokens(agreementAddress);
-    if (deepseektokens(context)+num > usertokensremaining){
-      res.status(400).send('Bad Request: Not enough tokens');
-      activeRequests.delete(publicKey);
-      return;
-    }
-    
-    if (typeof num === 'number' && isValidContext(context)) {
-      if (process.env.LOCALMODE === 'Hugging Face') {
-        runPython(JSON.stringify(context, null), num, async (out) => {
-          try {
-            const data = JSON.parse(out);
-            let agreement = await api.GetClientAgreement(address,address);
-            await api.NotifyResponse(agreement, data[0].inputtokens,data[0].outputtokens);
-            res.send(data[0]);
-          } finally {
-            // Release the lock
-            activeRequests.delete(publicKey);
-          }
-        });
-      } else if (process.env.LOCALMODE === 'Ollama') {
+  //try {
+  if (api.GetClientAgreement(SERVERADDRESS, publicKey) === null) {
+    res.status(400).send('Bad Request: No agreement');
+    activeRequests.delete(publicKey);
+    return;
+  }
+  /*if (!api.VerifySignature(publicKey, signature, context)){
+    res.status(400).send('Bad Request: Invalid Signature');
+    activeRequests.delete(publicKey);
+    return;
+  }*/
+  let agreementAddress = await api.GetClientAgreement(SERVERADDRESS, address);
+  console.log(agreementAddress);
+  let usertokensremaining = api.GetRemainingTokens(agreementAddress);
+
+  if (typeof num === 'number' && isValidContext(context)) {
+    if (process.env.LOCALMODE === 'Hugging Face') {
+      if (huggingfacetokens(context) + num > usertokensremaining) {
+        res.status(400).send('Bad Request: Not enough tokens');
+        activeRequests.delete(publicKey);
+        return;
+      }
+      runPython(JSON.stringify(context, null), num, async (out) => {
         try {
-          const response = await ollama.chat({
-            model: 'deepseek-r1:14b',
-            messages: context,
-            keep_alive: '10m',
-            num_predict: num
-          });
-          res.send(response);
+          const data = JSON.parse(out);
+          let agreement = await api.GetClientAgreement(SERVERADDRESS, address);
+          await api.NotifyResponse(agreement, data[0].inputtokens, data[0].outputtokens);
+          res.send(data[0]);
         } finally {
           // Release the lock
           activeRequests.delete(publicKey);
         }
+      });
+    } else if (process.env.LOCALMODE === 'Ollama') {
+
+      const inputTokens = ollamatokens(context);
+      console.log(inputTokens);
+      if (inputTokens + num > usertokensremaining) {
+        res.status(400).send('Bad Request: Not enough tokens');
+        activeRequests.delete(publicKey);
+        return;
       }
-    } else {
-      res.status(400).send('Bad Request: Expected a context object and a number');
+      try {
+        const response = await ollama.chat({
+          model: 'deepseek-r1:14b',
+          messages: context,
+          keep_alive: '10m',
+          num_predict: num
+        });
+
+        let agreement = await api.GetClientAgreement(SERVERADDRESS, address);
+        await api.NotifyResponse(agreement, inputTokens, ollamatokens(response.message.content));
+
+        res.send(response);
+      } finally {
+        // Release the lock
+        activeRequests.delete(publicKey);
+      }
     }
-  } catch (error) {
+  } else {
+    res.status(400).send('Bad Request: Expected a context object and a number');
+  }
+  /*} catch (error) {
     // If any error occurs, make sure to release the lock
     activeRequests.delete(publicKey);
     res.status(500).send('Internal Server Error');
-  }
+  }*/
 });
 
 // POST /deepseek/tokens route
@@ -115,7 +130,22 @@ app.post('/deepseek/tokens', (req, res) => {
   }
 });
 
-function deepseektokens(context){
+// POST /deepseek/tokens route
+app.post('/ollama/tokens', (req, res) => {
+  const { context } = req.body;
+  if (isValidContext(context)) {
+    return deepseektokens(context);
+  } else {
+    res.status(400).send('Bad Request: Expected a context object');
+  }
+});
+
+function ollamatokens(context) {
+  //tokens = chars / 4 for testing
+  return Math.floor(JSON.stringify(context).length / 4);
+}
+
+function huggingfacetokens(context) {
   const pythonProcess = spawn("python3", ["deepseektokens.py"]);
   pythonProcess.stdin.write(JSON.stringify(context) + "\n");
   pythonProcess.stdin.end();                // End input stream
